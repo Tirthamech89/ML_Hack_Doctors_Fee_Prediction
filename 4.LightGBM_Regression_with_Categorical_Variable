@@ -1,0 +1,158 @@
+import pandas as pd
+import numpy as np
+import re
+import nltk
+nltk.download('wordnet')
+from nltk.corpus import stopwords
+from sklearn.feature_extraction.text import TfidfVectorizer
+from nltk.stem import WordNetLemmatizer
+from nltk.stem.snowball import SnowballStemmer
+from nltk.corpus import wordnet
+from collections import Counter
+from sklearn.model_selection import train_test_split,GridSearchCV
+from catboost import CatBoostRegressor
+from sklearn.metrics import mean_squared_error
+from math import sqrt
+import lightgbm as lgb
+import matplotlib.pyplot as plt
+from sklearn.metrics import f1_score, roc_auc_score, log_loss, precision_score, recall_score
+from sklearn.preprocessing import LabelEncoder
+
+train = pd.read_csv('train_new.csv')
+test = pd.read_csv('test_new.csv')
+
+
+org = pd.read_excel('Final_Train.xlsx')
+target=org.Fees
+
+df_new = pd.concat([train, test])
+categorical = ["Profile", "Places", "City", "Miscellaneous_Info8", "Qualification8"]
+
+label_encoder = LabelEncoder()
+for col in categorical:
+    df_new[col] = label_encoder.fit_transform(df_new[col].astype(str))
+    
+feature_names = df_new.columns.tolist()
+
+train1=df_new[:5961]
+test1=df_new[5961:7948]
+
+X_train, X_test,y_train, y_test = train_test_split(train1, target, train_size=0.7, random_state=1234)
+# LightGBM dataset formatting 
+lgtrain = lgb.Dataset(X_train, y_train,
+                feature_name=feature_names,
+                categorical_feature = categorical)
+lgvalid = lgb.Dataset(X_test, y_test,
+                feature_name=feature_names,
+                categorical_feature = categorical)
+                
+ params = {
+    'objective' : 'regression',
+    'metric' : 'rmse',
+    'num_leaves' : 300,
+    'max_depth': 50,
+    'learning_rate' : 0.1,
+    'feature_fraction' : 1,
+    'verbosity' : -1,
+    'feature_fraction_seed': 1234,
+    'bagging_seed': 1234,
+    'colsample_bytree': 1,
+    'max_bin': 512,
+    'num_iterations': 1000,
+    #'reg_alpha': 5,
+    #'reg_lambda': 10,
+    #'min_split_gain': 0.4,
+    #'min_child_weight': 1,
+    'min_child_samples': 20,
+}
+
+
+lgb_clf = lgb.train(
+    params,
+    lgtrain,
+    num_boost_round=20000,
+    valid_sets=[lgtrain, lgvalid],
+    valid_names=["train", "valid"],
+    early_stopping_rounds=500,
+    verbose_eval=500)
+
+print("RMSE of the validation set:", np.sqrt(mean_squared_error(y_test, lgb_clf.predict(X_test))))
+
+#Saving the model
+lgb_clf.save_model('model_lgb1.txt')
+
+#Loading the model
+bst_ld = lgb.Booster(model_file='model_lgb1.txt')  #init model
+
+ypred = bst_ld.predict(X_train, num_iteration=bst_ld.best_iteration)
+ypred_val = bst_ld.predict(X_test, num_iteration=bst_ld.best_iteration)
+
+
+print(sqrt(mean_squared_error(y_train, ypred)))
+print(sqrt(mean_squared_error(y_test, ypred_val)))
+
+#Data for stacking
+#Loading the model
+bst_ld = lgb.Booster(model_file='model_lgb1.txt')
+
+y_all=bst_ld.predict(data=train1,num_iteration=bst_ld.best_iteration)
+y_all=pd.DataFrame(y_all)
+
+y_all.columns=['lgb_wcat']
+
+y_all.to_csv('lgb_wcat_stck_train.csv', index=False)
+
+#Without Adjustment
+y_pred_test2=bst_ld.predict(test1,num_iteration=bst_ld.best_iteration)
+y_pred_test2=pd.DataFrame(y_pred_test2)
+y_pred_test2.columns=['Fee_pred']
+
+bst_ld = lgb.Booster(model_file='model_lgb1.txt')
+
+y_predicted_test=bst_ld.predict(data=test1,num_iteration=bst_ld.best_iteration)
+y_predicted_test=pd.DataFrame(y_predicted_test)
+y_predicted_test.columns=['lgb_wcat']
+y_predicted_test.to_csv('lgb_wcat_stck_val.csv', index=False)
+
+#With Adjustment
+fee_test = pd.read_excel('Final_Test.xlsx')
+fee_test=fee_test['Miscellaneous_Info']
+fee_test1=pd.DataFrame(fee_test)
+
+for i in range(1987):
+    if (pd.isnull(fee_test1['Miscellaneous_Info'][i])==False):
+        myString=fee_test1['Miscellaneous_Info'][i]
+        t=myString.find('₹')
+        if (t>=0):
+            val=myString[t:t+7]
+            fee_test1.at[i,'fee_new_info']=val
+            
+fee_test1['fee_new_info'].fillna(0, inplace=True)
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^0-9]','')
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^\w\s]','')
+del fee_test1['Miscellaneous_Info']
+
+
+result2=pd.concat([y_pred_test2, fee_test1], axis=1)
+result2['fee_new_info'] = result2['fee_new_info'].str.strip()
+result2['fee_new_info']=pd.to_numeric(result2.fee_new_info)
+result2['fee_new_info'].fillna(0, inplace=True)
+
+result2['fee_new_info'] = np.where(result2['fee_new_info']>=1000,100,result2['fee_new_info'])
+result2['Fees']=np.where(result2['fee_new_info']==0,result2['Fee_pred'],result2['fee_new_info'])
+del result2['Fee_pred']
+del result2['fee_new_info']
+result2.to_csv('submission_basic2_lgb_withadj.csv', index=False)
+
+chk1=pd.read_excel('Final_Test.xlsx')
+chk2=chk1['Qualification'].str.contains('inspired')
+chk2=pd.DataFrame(chk2)
+chk2['td']=np.where(chk2['Qualification']==True,100,0)
+del chk2['Qualification']
+
+result3=pd.concat([result2,chk2],axis=1)
+
+result3['Fees']=result3['Fees']+result3['td']
+del result3['td']
+
+result3.to_excel('submission_basic2_lgb_withadj_v1.xlsx', index=False)#0.73473104

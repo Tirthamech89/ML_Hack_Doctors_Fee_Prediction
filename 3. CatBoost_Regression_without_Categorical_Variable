@@ -1,0 +1,113 @@
+train = pd.read_csv('train_new.csv')
+test = pd.read_csv('test_new.csv')
+
+org = pd.read_excel('Final_Train.xlsx')
+target=org.Fees
+
+df_new = pd.concat([train, test])
+
+##One hot encoding
+dfmerged = pd.concat([df_new[['Experience1','Rating1', 'Feedback1']],
+           pd.get_dummies(df_new['Profile'],drop_first = True),pd.get_dummies(df_new['Places'],drop_first = True),pd.get_dummies(df_new['City'],drop_first = True),pd.get_dummies(df_new['Miscellaneous_Info8'],drop_first = True),pd.get_dummies(df_new['Qualification8'],drop_first = True)],axis=1)
+
+train1=dfmerged[:5961]
+test1=dfmerged[5961:7948]
+
+X_train, X_validation, y_train, y_validation = train_test_split(train1, target, train_size=0.7, random_state=1234)
+
+model2=CatBoostRegressor(iterations=600, 
+                        depth=16, 
+                        learning_rate=0.1, 
+                        loss_function='RMSE',
+                        random_seed=99, 
+                        od_type='Iter', 
+                        od_wait=30,
+                        use_best_model=True,
+                        eval_metric='RMSE')
+model2.fit(X_train, y_train,eval_set=(X_validation, y_validation),plot=True)
+
+#Save_model
+model2.save_model("model_catboost_basic1_withoutcat", format = "json", export_parameters=None)
+
+# Load the model from JSON
+model_ld2 = CatBoostRegressor()
+model_ld2.load_model("model_catboost_basic1_withoutcat", format = 'json')
+
+#Prediction Check
+y_predicted_train2=model_ld2.predict(data=X_train)
+y_predicted_validation2=model_ld2.predict(data=X_validation)
+
+print(sqrt(mean_squared_error(y_train, y_predicted_train2)))
+print(sqrt(mean_squared_error(y_validation, y_predicted_validation2)))
+
+#Data for Stacking
+model_ld2 = CatBoostRegressor()
+model_ld2.load_model("model_catboost_basic1_withoutcat", format = 'json')
+
+y_all=model_ld2.predict(data=train1)
+y_all=pd.DataFrame(y_all)
+
+y_all.columns=['cat_wocat']
+
+y_all.to_csv('cat_wocat_stck_train.csv', index=False)
+
+#Without Adjustment
+y_predicted_test2=model_ld2.predict(data=test1)
+y_predicted_test2=pd.DataFrame(y_predicted_test2)
+y_predicted_test2.columns=['Fee_pred']
+
+y_predicted_test2.to_csv('submission_basic2_catboost_withoutadj.csv', index=False)
+
+#Validation Data for Stacking
+
+model_ld2 = CatBoostRegressor()
+model_ld2.load_model("model_catboost_basic1_withoutcat", format = 'json')
+
+y_predicted_test21=model_ld2.predict(data=test1)
+y_predicted_test21=pd.DataFrame(y_predicted_test2)
+y_predicted_test21.columns=['cat_wocat']
+
+y_predicted_test21.to_csv('cat_wocat_stck_val.csv', index=False)
+
+#With Adjustment
+fee_test = pd.read_excel('Final_Test.xlsx')
+fee_test=fee_test['Miscellaneous_Info']
+fee_test1=pd.DataFrame(fee_test)
+
+for i in range(1987):
+    if (pd.isnull(fee_test1['Miscellaneous_Info'][i])==False):
+        myString=fee_test1['Miscellaneous_Info'][i]
+        t=myString.find('₹')
+        if (t>=0):
+            val=myString[t:t+7]
+            fee_test1.at[i,'fee_new_info']=val
+            
+fee_test1['fee_new_info'].fillna(0, inplace=True)
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^0-9]','')
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^\w\s]','')
+del fee_test1['Miscellaneous_Info']
+
+
+result2=pd.concat([y_predicted_test2, fee_test1], axis=1)
+result2['fee_new_info'] = result2['fee_new_info'].str.strip()
+result2['fee_new_info']=pd.to_numeric(result2.fee_new_info)
+result2['fee_new_info'].fillna(0, inplace=True)
+
+result2['fee_new_info'] = np.where(result2['fee_new_info']>=1000,100,result2['fee_new_info'])
+result2['Fees']=np.where(result2['fee_new_info']==0,result2['Fee_pred'],result2['fee_new_info'])
+del result2['Fee_pred']
+del result2['fee_new_info']
+result2.to_csv('submission_basic2_catboost_withadj.csv', index=False)
+
+chk1=pd.read_excel('Final_Test.xlsx')
+chk2=chk1['Qualification'].str.contains('inspired')
+chk2=pd.DataFrame(chk2)
+chk2['td']=np.where(chk2['Qualification']==True,100,0)
+del chk2['Qualification']
+
+result3=pd.concat([result2,chk2],axis=1)
+
+result3['Fees']=result3['Fees']+result3['td']
+del result3['td']
+
+result3.to_excel('submission_basic2_catboost_withadj_v1.xlsx', index=False)#0.73864882

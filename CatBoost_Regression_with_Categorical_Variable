@@ -1,0 +1,126 @@
+import pandas as pd
+import numpy as np
+import re
+import nltk
+nltk.download('wordnet')
+from nltk.corpus import stopwords
+from sklearn.feature_extraction.text import TfidfVectorizer
+from nltk.stem import WordNetLemmatizer
+from nltk.stem.snowball import SnowballStemmer
+from nltk.corpus import wordnet
+from collections import Counter
+from sklearn.model_selection import train_test_split,GridSearchCV
+from catboost import CatBoostRegressor
+from sklearn.metrics import mean_squared_error
+from math import sqrt
+import lightgbm as lgb
+import matplotlib.pyplot as plt
+from sklearn.metrics import f1_score, roc_auc_score, log_loss, precision_score, recall_score, confusion_matrix
+
+train = pd.read_csv('train_new.csv')
+test = pd.read_csv('test_new.csv')
+
+org = pd.read_excel('Final_Train.xlsx')
+target=org.Fees
+
+categorical_features_indices = np.where(train.dtypes == object)[0]
+print(categorical_features_indices)
+X_train, X_validation, y_train, y_validation = train_test_split(train, target, train_size=0.7, random_state=1234)
+
+model=CatBoostRegressor(iterations=600, 
+                        depth=16, 
+                        learning_rate=0.1, 
+                        loss_function='RMSE',
+                        random_seed=99, 
+                        od_type='Iter', 
+                        od_wait=40,
+                        use_best_model=True,
+                        eval_metric='RMSE')
+
+model.fit(X_train, y_train,cat_features=categorical_features_indices,eval_set=(X_validation, y_validation),plot=True)
+
+#Save_model
+model.save_model("model_catboost_basic1", format = "json", export_parameters=None)
+
+# Load the model from JSON
+model_ld = CatBoostRegressor()
+model_ld.load_model("model_catboost_basic1", format = 'json')
+
+#Prediction Check
+y_predicted_train=model_ld.predict(data=X_train)
+y_predicted_validation=model_ld.predict(data=X_validation)
+
+print(sqrt(mean_squared_error(y_train, y_predicted_train)))
+print(sqrt(mean_squared_error(y_validation, y_predicted_validation)))
+
+#Data for Stacking
+model_ld = CatBoostRegressor()
+model_ld.load_model("model_catboost_basic1", format = 'json')
+
+y_all=model_ld.predict(data=train)
+y_all=pd.DataFrame(y_all)
+
+y_all.columns=['cat_wcat']
+
+y_all.to_csv('cat_wcat_stck_train.csv', index=False)
+
+#Prediction on Validation Data
+#Without Adjustment
+y_predicted_test=model_ld.predict(data=test)
+y_predicted_test=pd.DataFrame(y_predicted_test)
+y_predicted_test.columns=['Fee_pred']
+
+y_predicted_test.to_csv('submission_basic_catboost_withoutadj.csv', index=False)
+#y_predicted_test
+
+#Validation Data for Stacking
+model_ld = CatBoostRegressor()
+model_ld.load_model("model_catboost_basic1", format = 'json')
+
+y_predicted_test1=model_ld.predict(data=test)
+y_predicted_test1=pd.DataFrame(y_predicted_test1)
+y_predicted_test1.columns=['cat_wcat']
+y_predicted_test1.to_csv('cat_wcat_stck_val.csv', index=False)
+
+#With Adjustment
+fee_test = pd.read_excel('Final_Test.xlsx')
+fee_test=fee_test['Miscellaneous_Info']
+fee_test1=pd.DataFrame(fee_test)
+
+for i in range(1987):
+    if (pd.isnull(fee_test1['Miscellaneous_Info'][i])==False):
+        myString=fee_test1['Miscellaneous_Info'][i]
+        t=myString.find('₹')
+        if (t>=0):
+            val=myString[t:t+7]
+            fee_test1.at[i,'fee_new_info']=val
+            
+fee_test1['fee_new_info'].fillna(0, inplace=True)
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^0-9]','')
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^\w\s]','')
+del fee_test1['Miscellaneous_Info']
+
+
+result=pd.concat([y_predicted_test, fee_test1], axis=1)
+result['fee_new_info'] = result['fee_new_info'].str.strip()
+result['fee_new_info']=pd.to_numeric(result.fee_new_info)
+result['fee_new_info'].fillna(0, inplace=True)
+
+result['fee_new_info'] = np.where(result['fee_new_info']>=1000,100,result['fee_new_info'])
+result['Fees']=np.where(result['fee_new_info']==0,result['Fee_pred'],result['fee_new_info'])
+del result['Fee_pred']
+del result['fee_new_info']
+result.to_csv('submission_basic_catboost_withadj.csv', index=False)
+
+chk1=pd.read_excel('Final_Test.xlsx')
+chk2=chk1['Qualification'].str.contains('inspired')
+chk2=pd.DataFrame(chk2)
+chk2['td']=np.where(chk2['Qualification']==True,100,0)
+del chk2['Qualification']
+
+result3=pd.concat([result,chk2],axis=1)
+
+result3['Fees']=result3['Fees']+result3['td']
+del result3['td']
+
+result3.to_excel('submission_basic_catboost_withadj_v1.xlsx', index=False) #0.73971667

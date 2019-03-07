@@ -1,0 +1,93 @@
+import pandas as pd
+import numpy as np
+import re
+from sklearn.feature_extraction.text import CountVectorizer
+from collections import Counter
+from keras.preprocessing.text import one_hot
+import random
+
+train = pd.read_csv('train_new.csv')
+test = pd.read_csv('test_new.csv')
+
+df_new = pd.concat([train, test])
+df_new.reset_index(inplace=True, drop=True)
+
+df_new['Qualification8']=df_new['Qualification8'].str.replace(' pgd ', ' post graduat diploma ')
+df_new['Qualification8']=df_new['Qualification8'].str.replace(' pg ', ' post graduat ')
+
+df_new['Qualification8']=df_new['Qualification8'].str.replace(' and ', ' ')
+df_new['Qualification8']=df_new['Qualification8'].str.replace(' nd ', ' ')
+df_new['Qualification8']=df_new['Qualification8'].str.replace(' in ', ' ')
+df_new['Qualification8']=df_new['Qualification8'].str.replace(' the ', ' ')
+
+
+
+#Word List
+word_vectorizer = CountVectorizer(analyzer='word')
+sparse_matrix = word_vectorizer.fit_transform(df_new['Qualification8'])
+frequencies = sum(sparse_matrix).toarray()[0]
+freq1=pd.DataFrame(frequencies, index=word_vectorizer.get_feature_names(), columns=['frequency'])
+#freq1.to_csv('freq1.csv')
+
+word_vectorizer = CountVectorizer(analyzer='word')
+sparse_matrix = word_vectorizer.fit_transform(df_new['Miscellaneous_Info8'])
+frequencies = sum(sparse_matrix).toarray()[0]
+freq2=pd.DataFrame(frequencies, index=word_vectorizer.get_feature_names(), columns=['frequency'])
+#freq2.to_csv('freq2.csv')
+
+
+freq1_v1=freq1[freq1['frequency'] < 3]
+freq1_v1.reset_index(inplace = True)
+lf1=freq1_v1['index'].tolist()
+
+freq2_v1=freq2[freq2['frequency'] < 3]
+freq2_v1.reset_index(inplace = True)
+lf2=freq2_v1['index'].tolist()
+
+
+df_new['Qualification9'] = df_new['Qualification8'].apply(lambda x: ' '.join([word for word in x.split() if word not in (lf1)]))
+df_new['Miscellaneous_Info9'] = df_new['Miscellaneous_Info8'].apply(lambda x: ' '.join([word for word in x.split() if word not in (lf2)]))
+
+
+del df_new['Qualification8']
+del df_new['Miscellaneous_Info8']
+
+def remov_duplicates(input): 
+  
+    # split input string separated by space 
+    input = input.split(" ") 
+  
+    # joins two adjacent elements in iterable way 
+    for i in range(0, len(input)): 
+        input[i] = "".join(input[i]) 
+  
+    # now create dictionary using counter method 
+    # which will have strings as key and their  
+    # frequencies as value 
+    UniqW = Counter(input) 
+  
+    # joins two adjacent elements in iterable way 
+    s = " ".join(UniqW.keys())
+    return s
+
+df_new['Miscellaneous_Info10']=df_new.Miscellaneous_Info9.apply(remov_duplicates)
+df_new['Qualification10']=df_new.Qualification9.apply(remov_duplicates)
+
+df_new['Qualification10'] = df_new['Qualification10'].str.strip()
+df_new['Miscellaneous_Info10'] = df_new['Miscellaneous_Info10'].str.strip()
+
+del df_new['Miscellaneous_Info9']
+del df_new['Qualification9']
+
+
+df_new['new_column_msc']=df_new['Miscellaneous_Info10'].str.len()
+df_new['new_column_qua']=df_new['Qualification10'].str.len()
+
+df_new['Qualification10']=np.where(df_new['new_column_qua']==0, 'Missing',df_new['Qualification10'])
+df_new['Miscellaneous_Info10']=np.where(df_new['new_column_msc']==0, 'Missing',df_new['Miscellaneous_Info10'])
+
+del df_new['new_column_qua']
+del df_new['new_column_msc']
+
+
+df_new.to_csv('df_tf_idf_wc.csv',index=False)

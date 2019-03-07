@@ -1,1 +1,522 @@
+import pandas as pd
+import numpy as np
+import re
+import nltk
+nltk.download('wordnet')
+from nltk.corpus import stopwords
+from sklearn.feature_extraction.text import TfidfVectorizer
+from nltk.stem import WordNetLemmatizer
+from nltk.stem.snowball import SnowballStemmer
+from nltk.corpus import wordnet
+from collections import Counter
+from sklearn.model_selection import train_test_split,GridSearchCV
+from catboost import CatBoostRegressor
+from sklearn.metrics import mean_squared_error
+from math import sqrt
 
+
+train = pd.read_excel('Final_Train.xlsx')
+target=train.Fees
+del train['Fees']
+print(train.shape)
+
+for i in range(5961):
+    if (pd.isnull(train['Miscellaneous_Info'][i])==False) and (pd.isnull(train['Rating'][i])==False):
+        train.at[i,'Miscellaneous_Info1']=re.sub(train['Rating'][i],'', train['Miscellaneous_Info'][i])
+    if (pd.isnull(train['Miscellaneous_Info1'][i])==False) and (pd.isnull(train['Place'][i])==False):
+        train.at[i,'Miscellaneous_Info2']=re.sub(train['Place'][i],'', train['Miscellaneous_Info1'][i])
+    if (pd.isnull(train['Qualification'][i])==False):
+        train.at[i,'Qualification1']=re.sub('Homeopathy','Homeopath', train['Qualification'][i])
+    if (pd.isnull(train['Qualification1'][i])==False) and (pd.isnull(train['Profile'][i])==False):
+        train.at[i,'Qualification2']=re.sub(train['Profile'][i],'', train['Qualification1'][i])
+
+train['Experience1'] = train['Experience'].str.replace(r'[^\d.]+', '')
+train['Experience1'] = train['Experience1'].str.strip()
+train['Experience1']=pd.to_numeric(train.Experience1)
+
+train['Rating1'] = train['Rating'].str.replace(r'[^\d.]+', '')
+train['Rating1'] = train['Rating1'].str.strip()
+train['Rating1']=pd.to_numeric(train.Rating1)
+
+
+fd=train['Miscellaneous_Info2'].str.split('Feedback', expand=True)
+fd.columns=['Feedback','Remain']
+fd['Feedback1']=fd['Feedback'].str.replace(r'[^\d.]+', '')
+fd['Feedback1'] = fd['Feedback1'].str.strip()
+fd1=fd['Feedback1']
+train=pd.concat([train, fd1], axis=1)
+train['Feedback1']=pd.to_numeric(train.Feedback1)
+
+train['Miscellaneous_Info3'] = np.where(train['Feedback1']>=0, None, train['Miscellaneous_Info2'])
+train.Miscellaneous_Info3 = train.Miscellaneous_Info3.fillna('')
+
+td1=train['Place'].str.split(',', expand=True)
+td1.columns=['Places','City','Not_Required']
+del td1['Not_Required']
+td1['City']=np.where(td1['City']==' Sector 5', ' Delhi', td1['City'])
+train=pd.concat([train, td1], axis=1)
+
+train['Place'] = train['Place'].str.strip()
+train['City'] = train['City'].str.strip()
+
+
+
+del train['Miscellaneous_Info']
+del train['Miscellaneous_Info1']
+del train['Qualification']
+del train['Qualification1']
+del train['Experience']
+del train['Rating']
+del train['Miscellaneous_Info2']
+del train['Place']
+
+
+train['Miscellaneous_Info4']=train['Miscellaneous_Info3'].str.replace('[^A-Za-z]',' ')
+train['Miscellaneous_Info4']=train['Miscellaneous_Info4'].str.replace('[^\w\s]','')
+
+#Stopwords Removal
+nltk.download('stopwords')
+stop = stopwords.words('english')
+train['Miscellaneous_Info4'] = train['Miscellaneous_Info4'].apply(lambda x: ' '.join([word for word in x.split() if word not in (stop)]))
+del train['Miscellaneous_Info3']
+
+
+train['Miscellaneous_Info4']=train['Miscellaneous_Info4'].str.lower()
+train['Miscellaneous_Info4']=train['Miscellaneous_Info4'].str.replace('and', '')
+
+#Lemmatization and POS tagging
+w_tokenizer = nltk.tokenize.WhitespaceTokenizer()
+lemmatizer = nltk.stem.WordNetLemmatizer()
+
+def get_wordnet_pos(word):
+    """Map POS tag to first character lemmatize() accepts"""
+    tag = nltk.pos_tag([word])[0][1][0].upper()
+    tag_dict = {"J": wordnet.ADJ,
+                "N": wordnet.NOUN,
+                "V": wordnet.VERB,
+                "R": wordnet.ADV}
+
+    return tag_dict.get(tag, wordnet.NOUN)
+
+def lemmatize_text(text):
+    return [lemmatizer.lemmatize(w,get_wordnet_pos(w)) for w in w_tokenizer.tokenize(text)]
+
+train['Miscellaneous_Info5'] = train.Miscellaneous_Info4.apply(lemmatize_text)
+
+t_lem1=train['Miscellaneous_Info5']
+t_lem1=pd.DataFrame(t_lem1)
+t_lem1.to_csv('t_lem1.csv')
+t_lem2 = pd.read_csv('t_lem1.csv')
+t_lem2.columns=['Index','Miscellaneous_Info6']
+t_lem2['Miscellaneous_Info6']=t_lem2['Miscellaneous_Info6'].str.replace('[^\w\s]','')
+
+train=pd.concat([train, t_lem2], axis=1)
+del train['Miscellaneous_Info5']
+del train['Index']
+
+train['Miscellaneous_Info6'] = train['Miscellaneous_Info6'].str.strip()
+train['Miscellaneous_Info6']=train['Miscellaneous_Info6'].str.replace('x ray', 'xray')
+train['Miscellaneous_Info6']=train['Miscellaneous_Info6'].str.replace('e c g', 'ecg')
+
+
+#Stemming
+w_tokenizer1 = nltk.tokenize.WhitespaceTokenizer()
+stemmer = SnowballStemmer("english")
+
+def lemmatize_text1(text):
+    return [stemmer.stem(w) for w in w_tokenizer1.tokenize(text)]
+train['Miscellaneous_Info7'] = train.Miscellaneous_Info6.apply(lemmatize_text1)
+
+t_lem3=train['Miscellaneous_Info7']
+t_lem3=pd.DataFrame(t_lem3)
+del train['Miscellaneous_Info7']
+
+
+t_lem3.to_csv('t_lem3.csv')
+t_lem4 = pd.read_csv('t_lem3.csv')
+t_lem4.columns=['Index2','Miscellaneous_Info7']
+t_lem4['Miscellaneous_Info7']=t_lem4['Miscellaneous_Info7'].str.replace('[^\w\s]','')
+train=pd.concat([train, t_lem4], axis=1)
+train['Miscellaneous_Info7']=train['Miscellaneous_Info7'].str.replace('teeth', 'tooth')
+
+del train['Index2']
+#del train['Miscellaneous_Info4']
+del train['Miscellaneous_Info6']
+
+def remov_duplicates(input): 
+  
+    # split input string separated by space 
+    input = input.split(" ") 
+  
+    # joins two adjacent elements in iterable way 
+    for i in range(0, len(input)): 
+        input[i] = "".join(input[i]) 
+  
+    # now create dictionary using counter method 
+    # which will have strings as key and their  
+    # frequencies as value 
+    UniqW = Counter(input) 
+  
+    # joins two adjacent elements in iterable way 
+    s = " ".join(UniqW.keys())
+    return s
+
+train['Miscellaneous_Info8']=train.Miscellaneous_Info7.apply(remov_duplicates)
+del train['Miscellaneous_Info7']
+
+train['Qualification3']=train['Qualification2'].str.replace('[^A-Za-z]',' ')
+train['Qualification3']=train['Qualification3'].str.replace('[^\w\s]','')
+
+train['Qualification4'] = train['Qualification3'].apply(lambda x: ' '.join([word for word in x.split() if word not in (stop)]))
+del train['Qualification3']
+
+train['Qualification4']=train['Qualification4'].str.lower()
+
+w_tokenizer1 = nltk.tokenize.WhitespaceTokenizer()
+stemmer = SnowballStemmer("english")
+
+def lemmatize_text1(text):
+    return [stemmer.stem(w) for w in w_tokenizer1.tokenize(text)]
+train['Qualification7'] = train.Qualification4.apply(lemmatize_text1)
+
+q_lem3=train['Qualification7']
+q_lem3=pd.DataFrame(q_lem3)
+del train['Qualification7']
+
+
+q_lem3.to_csv('q_lem3.csv')
+q_lem4 = pd.read_csv('q_lem3.csv')
+q_lem4.columns=['Indexq','Qualification7']
+q_lem4['Qualification7']=q_lem4['Qualification7'].str.replace('[^\w\s]','')
+train=pd.concat([train, q_lem4], axis=1)
+
+del train['Indexq']
+
+train['Qualification7'] = train['Qualification7'].str.strip()
+
+train['Qualification7']=train['Qualification7'].str.replace('m ch', 'mch')
+train['Qualification7']=train['Qualification7'].str.replace('f a m', 'fam')
+train['Qualification7']=train['Qualification7'].str.replace('f c i p', 'fcip')
+train['Qualification7']=train['Qualification7'].str.replace('d h m', 'dhm')
+train['Qualification7']=train['Qualification7'].str.replace('ph d', 'phd')
+train['Qualification7']=train['Qualification7'].str.replace('m h sc', 'mhsc')
+train['Qualification7']=train['Qualification7'].str.replace('g i', 'gi')
+train['Qualification7']=train['Qualification7'].str.replace('e h', 'eh')
+train['Qualification7']=train['Qualification7'].str.replace('c c a h', 'ccah')
+train['Qualification7']=train['Qualification7'].str.replace('p g diploma', 'pgd')
+train['Qualification7']=train['Qualification7'].str.replace('m h sc', 'mhsc')
+train['Qualification7']=train['Qualification7'].str.replace('m sc', 'msc')
+train['Qualification7']=train['Qualification7'].str.replace('b sc', 'bsc')
+train['Qualification7']=train['Qualification7'].str.replace('m ch', 'mch')
+train['Qualification7']=train['Qualification7'].str.replace('d d', 'dd')
+train['Qualification7']=train['Qualification7'].str.replace('d sc', 'dsc')
+train['Qualification7']=train['Qualification7'].str.replace('b ac', 'bac')
+train['Qualification7']=train['Qualification7'].str.replace('d y a', 'dya')
+train['Qualification7']=train['Qualification7'].str.replace('f a g e', 'fage')
+train['Qualification7']=train['Qualification7'].str.replace('g a m s', 'gams')
+train['Qualification7']=train['Qualification7'].str.replace('d sc', 'dsc')
+train['Qualification7']=train['Qualification7'].str.replace('m d', 'md')
+train['Qualification7']=train['Qualification7'].str.replace('f s r h', 'fsrh')
+train['Qualification7']=train['Qualification7'].str.replace('f c p s', 'fcps')
+train['Qualification7']=train['Qualification7'].str.replace('d h m', 'dhm')
+train['Qualification7']=train['Qualification7'].str.replace('p g', 'pg')
+
+def remov_duplicates(input): 
+  
+    # split input string separated by space 
+    input = input.split(" ") 
+  
+    # joins two adjacent elements in iterable way 
+    for i in range(0, len(input)): 
+        input[i] = "".join(input[i]) 
+  
+    # now create dictionary using counter method 
+    # which will have strings as key and their  
+    # frequencies as value 
+    UniqW = Counter(input) 
+  
+    # joins two adjacent elements in iterable way 
+    s = " ".join(UniqW.keys())
+    return s
+
+train['Qualification8']=train.Qualification7.apply(remov_duplicates)
+del train['Qualification7']
+del train['Qualification4']
+del train['Qualification2']
+del train['Miscellaneous_Info4']
+
+train['new_column_msc']=train['Miscellaneous_Info8'].str.len()
+train['new_column_qua']=train['Qualification8'].str.len()
+
+train['Qualification8']=np.where(train['new_column_qua']==0, 'Missing',train['Qualification8'])
+train['Miscellaneous_Info8']=np.where(train['new_column_msc']==0, 'Missing',train['Miscellaneous_Info8'])
+
+del train['new_column_qua']
+del train['new_column_msc']
+
+
+train['Rating1'].fillna(0, inplace=True)
+train['Feedback1'].fillna(0, inplace=True)
+train['Places'].fillna('Missing', inplace=True)
+train['City'].fillna('Missing', inplace=True)
+
+train.info()
+
+#Test Data
+
+test = pd.read_excel('Final_Test.xlsx')
+print(test.shape)
+
+
+for i in range(1987):
+    if (pd.isnull(test['Miscellaneous_Info'][i])==False) and (pd.isnull(test['Rating'][i])==False):
+        test.at[i,'Miscellaneous_Info1']=re.sub(test['Rating'][i],'', test['Miscellaneous_Info'][i])
+        
+for i in range(1987):
+    if (pd.isnull(test['Miscellaneous_Info1'][i])==False) and (pd.isnull(test['Place'][i])==False):
+        test.at[i,'Miscellaneous_Info2']=re.sub(test['Place'][i],'', test['Miscellaneous_Info1'][i])
+    if (pd.isnull(test['Qualification'][i])==False):
+        test.at[i,'Qualification1']=re.sub('Homeopathy','Homeopath', test['Qualification'][i])
+    if (pd.isnull(test['Qualification1'][i])==False) and (pd.isnull(test['Profile'][i])==False):
+        test.at[i,'Qualification2']=re.sub(test['Profile'][i],'', test['Qualification1'][i])
+        
+test['Experience1'] = test['Experience'].str.replace(r'[^\d.]+', '')
+test['Experience1'] = test['Experience1'].str.strip()
+test['Experience1']=pd.to_numeric(test.Experience1)
+
+test['Rating1'] = test['Rating'].str.replace(r'[^\d.]+', '')
+test['Rating1'] = test['Rating1'].str.strip()
+test['Rating1']=pd.to_numeric(test.Rating1)
+
+
+fd=test['Miscellaneous_Info2'].str.split('Feedback', expand=True)
+fd.columns=['Feedback','Remain']
+fd['Feedback1']=fd['Feedback'].str.replace(r'[^\d.]+', '')
+fd['Feedback1'] = fd['Feedback1'].str.strip()
+fd1=fd['Feedback1']
+test=pd.concat([test, fd1], axis=1)
+test['Feedback1']=pd.to_numeric(test.Feedback1)
+
+
+test['Miscellaneous_Info3'] = np.where(test['Feedback1']>=0, None, test['Miscellaneous_Info2'])
+test.Miscellaneous_Info3 = test.Miscellaneous_Info3.fillna('')
+
+td1=test['Place'].str.split(',', expand=True)
+td1.columns=['Places','City']
+
+test=pd.concat([test, td1], axis=1)
+
+test['Place'] = test['Place'].str.strip()
+test['City'] = test['City'].str.strip()
+
+del test['Miscellaneous_Info']
+del test['Miscellaneous_Info1']
+del test['Qualification']
+del test['Qualification1']
+del test['Experience']
+del test['Rating']
+del test['Miscellaneous_Info2']
+del test['Place']
+
+test['Miscellaneous_Info4']=test['Miscellaneous_Info3'].str.replace('[^A-Za-z]',' ')
+test['Miscellaneous_Info4']=test['Miscellaneous_Info4'].str.replace('[^\w\s]','')
+
+nltk.download('stopwords')
+stop = stopwords.words('english')
+test['Miscellaneous_Info4'] = test['Miscellaneous_Info4'].apply(lambda x: ' '.join([word for word in x.split() if word not in (stop)]))
+del test['Miscellaneous_Info3']
+
+
+test['Miscellaneous_Info4']=test['Miscellaneous_Info4'].str.lower()
+test['Miscellaneous_Info4']=test['Miscellaneous_Info4'].str.replace('and', '')
+
+
+
+
+
+w_tokenizer = nltk.tokenize.WhitespaceTokenizer()
+lemmatizer = nltk.stem.WordNetLemmatizer()
+
+def get_wordnet_pos(word):
+    """Map POS tag to first character lemmatize() accepts"""
+    tag = nltk.pos_tag([word])[0][1][0].upper()
+    tag_dict = {"J": wordnet.ADJ,
+                "N": wordnet.NOUN,
+                "V": wordnet.VERB,
+                "R": wordnet.ADV}
+
+    return tag_dict.get(tag, wordnet.NOUN)
+
+def lemmatize_text(text):
+    return [lemmatizer.lemmatize(w,get_wordnet_pos(w)) for w in w_tokenizer.tokenize(text)]
+
+test['Miscellaneous_Info5'] = test.Miscellaneous_Info4.apply(lemmatize_text)
+
+t_lem1=test['Miscellaneous_Info5']
+t_lem1=pd.DataFrame(t_lem1)
+t_lem1.to_csv('t_lem1.csv')
+t_lem2 = pd.read_csv('t_lem1.csv')
+t_lem2.columns=['Index','Miscellaneous_Info6']
+t_lem2['Miscellaneous_Info6']=t_lem2['Miscellaneous_Info6'].str.replace('[^\w\s]','')
+
+test=pd.concat([test, t_lem2], axis=1)
+del test['Miscellaneous_Info5']
+del test['Index']
+
+test['Miscellaneous_Info6'] = test['Miscellaneous_Info6'].str.strip()
+test['Miscellaneous_Info6']=test['Miscellaneous_Info6'].str.replace('x ray', 'xray')
+test['Miscellaneous_Info6']=test['Miscellaneous_Info6'].str.replace('e c g', 'ecg')
+
+
+
+w_tokenizer1 = nltk.tokenize.WhitespaceTokenizer()
+stemmer = SnowballStemmer("english")
+
+def lemmatize_text1(text):
+    return [stemmer.stem(w) for w in w_tokenizer1.tokenize(text)]
+test['Miscellaneous_Info7'] = test.Miscellaneous_Info6.apply(lemmatize_text1)
+
+t_lem3=test['Miscellaneous_Info7']
+t_lem3=pd.DataFrame(t_lem3)
+del test['Miscellaneous_Info7']
+
+
+t_lem3.to_csv('t_lem3.csv')
+t_lem4 = pd.read_csv('t_lem3.csv')
+t_lem4.columns=['Index2','Miscellaneous_Info7']
+t_lem4['Miscellaneous_Info7']=t_lem4['Miscellaneous_Info7'].str.replace('[^\w\s]','')
+test=pd.concat([test, t_lem4], axis=1)
+test['Miscellaneous_Info7']=test['Miscellaneous_Info7'].str.replace('teeth', 'tooth')
+
+del test['Index2']
+#del train['Miscellaneous_Info4']
+del test['Miscellaneous_Info6']
+
+def remov_duplicates(input): 
+  
+    # split input string separated by space 
+    input = input.split(" ") 
+  
+    # joins two adjacent elements in iterable way 
+    for i in range(0, len(input)): 
+        input[i] = "".join(input[i]) 
+  
+    # now create dictionary using counter method 
+    # which will have strings as key and their  
+    # frequencies as value 
+    UniqW = Counter(input) 
+  
+    # joins two adjacent elements in iterable way 
+    s = " ".join(UniqW.keys())
+    return s
+
+test['Miscellaneous_Info8']=test.Miscellaneous_Info7.apply(remov_duplicates)
+del test['Miscellaneous_Info7']
+
+test['Qualification3']=test['Qualification2'].str.replace('[^A-Za-z]',' ')
+test['Qualification3']=test['Qualification3'].str.replace('[^\w\s]','')
+
+test['Qualification4'] = test['Qualification3'].apply(lambda x: ' '.join([word for word in x.split() if word not in (stop)]))
+del test['Qualification3']
+
+test['Qualification4']=test['Qualification4'].str.lower()
+
+
+
+
+w_tokenizer1 = nltk.tokenize.WhitespaceTokenizer()
+stemmer = SnowballStemmer("english")
+
+def lemmatize_text1(text):
+    return [stemmer.stem(w) for w in w_tokenizer1.tokenize(text)]
+test['Qualification7'] = test.Qualification4.apply(lemmatize_text1)
+
+q_lem3=test['Qualification7']
+q_lem3=pd.DataFrame(q_lem3)
+del test['Qualification7']
+
+
+q_lem3.to_csv('q_lem3.csv')
+q_lem4 = pd.read_csv('q_lem3.csv')
+q_lem4.columns=['Indexq','Qualification7']
+q_lem4['Qualification7']=q_lem4['Qualification7'].str.replace('[^\w\s]','')
+test=pd.concat([test, q_lem4], axis=1)
+
+del test['Indexq']
+
+test['Qualification7'] = test['Qualification7'].str.strip()
+
+test['Qualification7']=test['Qualification7'].str.replace('m ch', 'mch')
+test['Qualification7']=test['Qualification7'].str.replace('f a m', 'fam')
+test['Qualification7']=test['Qualification7'].str.replace('f c i p', 'fcip')
+test['Qualification7']=test['Qualification7'].str.replace('d h m', 'dhm')
+test['Qualification7']=test['Qualification7'].str.replace('ph d', 'phd')
+test['Qualification7']=test['Qualification7'].str.replace('m h sc', 'mhsc')
+test['Qualification7']=test['Qualification7'].str.replace('g i', 'gi')
+test['Qualification7']=test['Qualification7'].str.replace('e h', 'eh')
+test['Qualification7']=test['Qualification7'].str.replace('c c a h', 'ccah')
+test['Qualification7']=test['Qualification7'].str.replace('p g diploma', 'pgd')
+test['Qualification7']=test['Qualification7'].str.replace('m h sc', 'mhsc')
+test['Qualification7']=test['Qualification7'].str.replace('m sc', 'msc')
+test['Qualification7']=test['Qualification7'].str.replace('b sc', 'bsc')
+test['Qualification7']=test['Qualification7'].str.replace('m ch', 'mch')
+test['Qualification7']=test['Qualification7'].str.replace('d d', 'dd')
+test['Qualification7']=test['Qualification7'].str.replace('d sc', 'dsc')
+test['Qualification7']=test['Qualification7'].str.replace('b ac', 'bac')
+test['Qualification7']=test['Qualification7'].str.replace('d y a', 'dya')
+test['Qualification7']=test['Qualification7'].str.replace('f a g e', 'fage')
+test['Qualification7']=test['Qualification7'].str.replace('g a m s', 'gams')
+test['Qualification7']=test['Qualification7'].str.replace('d sc', 'dsc')
+test['Qualification7']=test['Qualification7'].str.replace('m d', 'md')
+test['Qualification7']=test['Qualification7'].str.replace('f s r h', 'fsrh')
+test['Qualification7']=test['Qualification7'].str.replace('f c p s', 'fcps')
+test['Qualification7']=test['Qualification7'].str.replace('d h m', 'dhm')
+test['Qualification7']=test['Qualification7'].str.replace('p g', 'pg')
+
+
+def remov_duplicates(input): 
+  
+    # split input string separated by space 
+    input = input.split(" ") 
+  
+    # joins two adjacent elements in iterable way 
+    for i in range(0, len(input)): 
+        input[i] = "".join(input[i]) 
+  
+    # now create dictionary using counter method 
+    # which will have strings as key and their  
+    # frequencies as value 
+    UniqW = Counter(input) 
+  
+    # joins two adjacent elements in iterable way 
+    s = " ".join(UniqW.keys())
+    return s
+
+test['Qualification8']=test.Qualification7.apply(remov_duplicates)
+del test['Qualification7']
+del test['Qualification4']
+del test['Qualification2']
+del test['Miscellaneous_Info4']
+
+
+
+test['new_column_msc']=test['Miscellaneous_Info8'].str.len()
+test['new_column_qua']=test['Qualification8'].str.len()
+
+
+test['Qualification8']=np.where(test['new_column_qua']==0, 'Missing',test['Qualification8'])
+test['Miscellaneous_Info8']=np.where(test['new_column_msc']==0, 'Missing',test['Miscellaneous_Info8'])
+
+del test['new_column_qua']
+del test['new_column_msc']
+
+
+test['Rating1'].fillna(0, inplace=True)
+test['Feedback1'].fillna(0, inplace=True)
+test['Places'].fillna('Missing', inplace=True)
+test['City'].fillna('Missing', inplace=True)
+
+test.info()
+
+train.to_csv('train_new.csv', index=False)
+test.to_csv('test_new.csv', index=False)

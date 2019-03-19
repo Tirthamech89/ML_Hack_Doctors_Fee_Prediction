@@ -1,0 +1,575 @@
+import pandas as pd
+import numpy as np
+import re
+from math import sqrt
+from sklearn.model_selection import train_test_split,GridSearchCV
+from sklearn.metrics import mean_squared_error
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import Lasso
+import xgboost as xgb
+from sklearn.model_selection import KFold
+
+
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.wrappers.scikit_learn import KerasRegressor
+from sklearn.model_selection import cross_val_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+
+#Basic Average of the output
+cat_basic1=pd.read_excel('submission_basic_catboost_withadj_v1.xlsx')
+cat_basic1.columns=['cat_basic1']
+
+cat_basic2=pd.read_excel('submission_basic2_catboost_withadj_v1.xlsx')
+cat_basic2.columns=['cat_basic2']
+
+cat_tfidf=pd.read_excel('submission_basic_catboost_withadj_tf_v1.xlsx')
+cat_tfidf.columns=['cat_tfidf']
+
+cat_wc=pd.read_excel('submission_basic_catboost_withadj_wc_v1.xlsx')
+cat_wc.columns=['cat_wc']
+
+lgb_basic2=pd.read_excel('submission_basic2_lgb_withadj_v1.xlsx')
+lgb_basic2.columns=['lgb_basic2']
+
+lgb_basic=pd.read_excel('submission_basic_lgb_withadj_v1.xlsx')
+lgb_basic.columns=['lgb_basic']
+
+lgb_wc=pd.read_excel('submission_basic2_lgb_withadj_wc_v1.xlsx')
+lgb_wc.columns=['lgb_wc']
+
+lgb_tfidf=pd.read_excel('submission_basic2_lgb_withadj_tf_v1.xlsx')
+lgb_tfidf.columns=['lgb_tfidf']
+
+xgb_ohc=pd.read_excel('submission_ohc_xgb_withadj_v1.xlsx')
+xgb_ohc.columns=['xgb_ohc']
+
+xgb_wc=pd.read_excel('submission_tdm_xgb_withadj_v1.xlsx')
+xgb_wc.columns=['xgb_wc']
+
+xgb_tfidf=pd.read_excel('submission_tfidf_xgb_withadj_v1.xlsx')
+xgb_tfidf.columns=['xgb_tfidf']
+
+
+final_stack=pd.concat([cat_basic1,cat_basic2,cat_tfidf,cat_wc,lgb_basic2,lgb_basic,lgb_wc,lgb_tfidf,xgb_ohc,xgb_wc,xgb_tfidf],axis=1)
+#Average_ensemble(0.74210602)
+final_stack1=final_stack.mean(axis=1)
+ypred1=pd.DataFrame(final_stack1)
+ypred1.columns=['Fee_pred']
+
+#Max of ensemble (0.70661305)
+final_stack2=final_stack.max(axis=1)
+ypred2=pd.DataFrame(final_stack2)
+ypred2.columns=['Fee_pred']
+
+#Min of ensemble 
+final_stack3=final_stack.min(axis=1)
+ypred3=pd.DataFrame(final_stack3)
+ypred3.columns=['Fee_pred']
+
+#With Adjustment
+fee_test = pd.read_excel('Final_Test.xlsx')
+fee_test=fee_test['Miscellaneous_Info']
+fee_test1=pd.DataFrame(fee_test)
+
+for i in range(1987):
+    if (pd.isnull(fee_test1['Miscellaneous_Info'][i])==False):
+        myString=fee_test1['Miscellaneous_Info'][i]
+        t=myString.find('₹')
+        if (t>=0):
+            val=myString[t:t+7]
+            fee_test1.at[i,'fee_new_info']=val
+            
+fee_test1['fee_new_info'].fillna(0, inplace=True)
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^0-9]','')
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^\w\s]','')
+del fee_test1['Miscellaneous_Info']
+
+
+result2=pd.concat([ypred3, fee_test1], axis=1)
+result2['fee_new_info'] = result2['fee_new_info'].str.strip()
+result2['fee_new_info']=pd.to_numeric(result2.fee_new_info)
+result2['fee_new_info'].fillna(0, inplace=True)
+
+result2['fee_new_info'] = np.where(result2['fee_new_info']>=1000,100,result2['fee_new_info'])
+result2['Fees']=np.where(result2['fee_new_info']==0,result2['Fee_pred'],result2['fee_new_info'])
+
+chk1=pd.read_excel('Final_Test.xlsx')
+chk2=chk1['Qualification'].str.contains('inspired')
+chk2=pd.DataFrame(chk2)
+chk2['td']=np.where(chk2['Qualification']==True,100,0)
+del chk2['Qualification']
+
+result3=pd.concat([result2,chk2],axis=1)
+
+result3['Fees1']=np.where(result3['td']==100,100,result3['Fees'])
+
+del result3['Fee_pred']
+del result3['fee_new_info']
+del result3['Fees']
+del result3['td']
+
+result3.columns=['Fees']
+
+#result3.to_excel('submission_stck_avg.xlsx', index=False) (0.74210602)
+#result3.to_excel('submission_stck_max.xlsx', index=False) (0.70661305)
+#result3.to_excel('submission_stck_min.xlsx', index=False) (0.74519386)
+
+#Linear Regression: 0.73730365
+
+cat_tdm_stck_train = pd.read_csv('cat_tdm_stck_train.csv')
+cat_tf_stck_train = pd.read_csv('cat_tf_stck_train.csv')
+cat_wcat_stck_train = pd.read_csv('cat_wcat_stck_train.csv')
+cat_wocat_stck_train = pd.read_csv('cat_wocat_stck_train.csv')
+
+
+lgb_tdm_stck_train = pd.read_csv('lgb_tdm_stck_train.csv')
+lgb_tf_stck_train = pd.read_csv('lgb_tf_stck_train.csv')
+lgb_wcat_stck_train = pd.read_csv('lgb_wcat_stck_train.csv')
+lgb_wocat_stck_train = pd.read_csv('lgb_wocat_stck_train.csv')
+
+xgb_tdm_stck_train = pd.read_csv('xgb_tdm_stck_train.csv')
+xgb_tf_stck_train = pd.read_csv('xgb_tf_stck_train.csv')
+xgb_wocat_stck_train = pd.read_csv('xgb_wocat_stck_train.csv')
+
+final_stack=pd.concat([cat_tdm_stck_train,cat_tf_stck_train,cat_wcat_stck_train,cat_wocat_stck_train,lgb_tdm_stck_train,lgb_tf_stck_train,lgb_wcat_stck_train,lgb_wocat_stck_train,xgb_tdm_stck_train,xgb_tf_stck_train,xgb_wocat_stck_train], axis=1)
+org = pd.read_excel('Final_Train.xlsx')
+target=org.Fees
+
+X_train, X_test, y_train, y_test = train_test_split(final_stack, target, train_size=0.7, random_state=99)
+
+linearRegressor = LinearRegression()
+linearRegressor.fit(X_train, y_train)
+
+ypred = linearRegressor.predict(X_train)
+ypred_val = linearRegressor.predict(X_test)
+
+
+print(sqrt(mean_squared_error(y_train, ypred)))
+print(sqrt(mean_squared_error(y_test, ypred_val)))
+
+cat_tdm_stck_val = pd.read_csv('cat_tdm_stck_val.csv')
+cat_tf_stck_val = pd.read_csv('cat_tf_stck_val.csv')
+cat_wcat_stck_val = pd.read_csv('cat_wcat_stck_val.csv')
+cat_wocat_stck_val = pd.read_csv('cat_wocat_stck_val.csv')
+
+
+lgb_tdm_stck_val = pd.read_csv('lgb_tdm_stck_val.csv')
+lgb_tf_stck_val = pd.read_csv('lgb_tf_stck_val.csv')
+lgb_wcat_stck_val = pd.read_csv('lgb_wcat_stck_val.csv')
+lgb_wocat_stck_val = pd.read_csv('lgb_wocat_stck_val.csv')
+
+xgb_tdm_stck_val = pd.read_csv('xgb_tdm_stck_val.csv')
+xgb_tf_stck_val = pd.read_csv('xgb_tf_stck_val.csv')
+xgb_wocat_stck_val = pd.read_csv('xgb_wocat_stck_val.csv')
+
+final_stack_val=pd.concat([cat_tdm_stck_val,cat_tf_stck_val,cat_wcat_stck_val,cat_wocat_stck_val,lgb_tdm_stck_val,lgb_tf_stck_val,lgb_wcat_stck_val,lgb_wocat_stck_val,xgb_tdm_stck_val,xgb_tf_stck_val,xgb_wocat_stck_val], axis=1)
+ypred1 = linearRegressor.predict(final_stack_val)
+ypred1=pd.DataFrame(ypred1)
+ypred1.columns=['Fee_pred']
+
+#With Adjustment
+fee_test = pd.read_excel('Final_Test.xlsx')
+fee_test=fee_test['Miscellaneous_Info']
+fee_test1=pd.DataFrame(fee_test)
+
+for i in range(1987):
+    if (pd.isnull(fee_test1['Miscellaneous_Info'][i])==False):
+        myString=fee_test1['Miscellaneous_Info'][i]
+        t=myString.find('₹')
+        if (t>=0):
+            val=myString[t:t+7]
+            fee_test1.at[i,'fee_new_info']=val
+            
+fee_test1['fee_new_info'].fillna(0, inplace=True)
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^0-9]','')
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^\w\s]','')
+del fee_test1['Miscellaneous_Info']
+
+
+result2=pd.concat([ypred1, fee_test1], axis=1)
+result2['fee_new_info'] = result2['fee_new_info'].str.strip()
+result2['fee_new_info']=pd.to_numeric(result2.fee_new_info)
+result2['fee_new_info'].fillna(0, inplace=True)
+
+result2['fee_new_info'] = np.where(result2['fee_new_info']>=1000,100,result2['fee_new_info'])
+result2['Fees']=np.where(result2['fee_new_info']==0,result2['Fee_pred'],result2['fee_new_info'])
+
+chk1=pd.read_excel('Final_Test.xlsx')
+chk2=chk1['Qualification'].str.contains('inspired')
+chk2=pd.DataFrame(chk2)
+chk2['td']=np.where(chk2['Qualification']==True,100,0)
+del chk2['Qualification']
+
+result3=pd.concat([result2,chk2],axis=1)
+
+result3['Fees1']=np.where(result3['td']==100,100,result3['Fees'])
+
+del result3['Fee_pred']
+del result3['fee_new_info']
+del result3['Fees']
+del result3['td']
+
+result3.columns=['Fees']
+result3.to_excel('submission_stck_lregres.xlsx', index=False)#0.73730365
+
+#Lasso Regression 0.73745083
+
+lasso=Lasso()
+lasso_params={'alpha':[0.001, 0.01, 0.1]}
+lasso_grid=GridSearchCV(lasso,lasso_params,cv=5, verbose=10, scoring='neg_mean_absolute_error')
+lasso_grid.fit(X_train, y_train)
+lasso_score=lasso_grid.cv_results_
+print (lasso_score)
+
+lassoreg = Lasso(alpha=0.001,normalize=True, max_iter=1e5)
+lassoreg.fit(X_train, y_train)
+
+print (lasso_grid.best_params_)
+
+ypred = lassoreg.predict(X_train)
+ypred_val = lassoreg.predict(X_test)
+
+
+print(sqrt(mean_squared_error(y_train, ypred)))
+print(sqrt(mean_squared_error(y_test, ypred_val)))
+
+ypred1 = lassoreg.predict(final_stack_val)
+ypred1=pd.DataFrame(ypred1)
+ypred1.columns=['Fee_pred']
+
+
+#With Adjustment
+fee_test = pd.read_excel('Final_Test.xlsx')
+fee_test=fee_test['Miscellaneous_Info']
+fee_test1=pd.DataFrame(fee_test)
+
+for i in range(1987):
+    if (pd.isnull(fee_test1['Miscellaneous_Info'][i])==False):
+        myString=fee_test1['Miscellaneous_Info'][i]
+        t=myString.find('₹')
+        if (t>=0):
+            val=myString[t:t+7]
+            fee_test1.at[i,'fee_new_info']=val
+            
+fee_test1['fee_new_info'].fillna(0, inplace=True)
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^0-9]','')
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^\w\s]','')
+del fee_test1['Miscellaneous_Info']
+
+
+result2=pd.concat([ypred1, fee_test1], axis=1)
+result2['fee_new_info'] = result2['fee_new_info'].str.strip()
+result2['fee_new_info']=pd.to_numeric(result2.fee_new_info)
+result2['fee_new_info'].fillna(0, inplace=True)
+
+result2['fee_new_info'] = np.where(result2['fee_new_info']>=1000,100,result2['fee_new_info'])
+result2['Fees']=np.where(result2['fee_new_info']==0,result2['Fee_pred'],result2['fee_new_info'])
+
+chk1=pd.read_excel('Final_Test.xlsx')
+chk2=chk1['Qualification'].str.contains('inspired')
+chk2=pd.DataFrame(chk2)
+chk2['td']=np.where(chk2['Qualification']==True,100,0)
+del chk2['Qualification']
+
+result3=pd.concat([result2,chk2],axis=1)
+
+result3['Fees1']=np.where(result3['td']==100,100,result3['Fees'])
+
+del result3['Fee_pred']
+del result3['fee_new_info']
+del result3['Fees']
+del result3['td']
+
+result3.columns=['Fees']
+result3.to_excel('submission_stck_lasso.xlsx', index=False) #0.73745083
+
+#XGBoost (0.73975835)
+model=xgb.XGBRegressor(colsample_bylevel=1, 
+                       colsample_bytree=1,
+                       gamma=1, 
+                       learning_rate=0.02, 
+                       max_depth=4,
+                       min_child_weight=2, 
+                       n_estimators=600, 
+                       objective='reg:linear', 
+                       reg_alpha=1, 
+                       reg_lambda=1,
+                       scale_pos_weight=1, 
+                       seed=5461, 
+                       subsample=1,
+                       silent=True)
+
+model.fit(X_train, y_train)
+
+ypred = model.predict(X_train)
+ypred_val = model.predict(X_test)
+
+
+print(sqrt(mean_squared_error(y_train, ypred)))
+print(sqrt(mean_squared_error(y_test, ypred_val)))
+
+ypred1 = model.predict(final_stack_val)
+ypred1=pd.DataFrame(ypred1)
+ypred1.columns=['Fee_pred']
+
+
+#With Adjustment
+fee_test = pd.read_excel('Final_Test.xlsx')
+fee_test=fee_test['Miscellaneous_Info']
+fee_test1=pd.DataFrame(fee_test)
+
+for i in range(1987):
+    if (pd.isnull(fee_test1['Miscellaneous_Info'][i])==False):
+        myString=fee_test1['Miscellaneous_Info'][i]
+        t=myString.find('₹')
+        if (t>=0):
+            val=myString[t:t+7]
+            fee_test1.at[i,'fee_new_info']=val
+            
+fee_test1['fee_new_info'].fillna(0, inplace=True)
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^0-9]','')
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^\w\s]','')
+del fee_test1['Miscellaneous_Info']
+
+
+result2=pd.concat([ypred1, fee_test1], axis=1)
+result2['fee_new_info'] = result2['fee_new_info'].str.strip()
+result2['fee_new_info']=pd.to_numeric(result2.fee_new_info)
+result2['fee_new_info'].fillna(0, inplace=True)
+
+result2['fee_new_info'] = np.where(result2['fee_new_info']>=1000,100,result2['fee_new_info'])
+result2['Fees']=np.where(result2['fee_new_info']==0,result2['Fee_pred'],result2['fee_new_info'])
+
+chk1=pd.read_excel('Final_Test.xlsx')
+chk2=chk1['Qualification'].str.contains('inspired')
+chk2=pd.DataFrame(chk2)
+chk2['td']=np.where(chk2['Qualification']==True,100,0)
+del chk2['Qualification']
+
+result3=pd.concat([result2,chk2],axis=1)
+
+result3['Fees1']=np.where(result3['td']==100,100,result3['Fees'])
+
+del result3['Fee_pred']
+del result3['fee_new_info']
+del result3['Fees']
+del result3['td']
+
+result3.columns=['Fees']
+result3.to_excel('submission_stck_xgb.xlsx', index=False)#0.73975835
+
+#Random Forest (0.74074945)
+rf = RandomForestRegressor(n_estimators = 850, 
+                           max_depth = 8,
+                           random_state = 99,
+                           max_features = 11
+                           )
+rf.fit(X_train, y_train)
+
+ypred = rf.predict(X_train)
+ypred_val = rf.predict(X_test)
+
+
+print(sqrt(mean_squared_error(y_train, ypred)))
+print(sqrt(mean_squared_error(y_test, ypred_val)))
+
+ypred1 = rf.predict(final_stack_val)
+ypred1=pd.DataFrame(ypred1)
+ypred1.columns=['Fee_pred']
+
+
+#With Adjustment
+fee_test = pd.read_excel('Final_Test.xlsx')
+fee_test=fee_test['Miscellaneous_Info']
+fee_test1=pd.DataFrame(fee_test)
+
+for i in range(1987):
+    if (pd.isnull(fee_test1['Miscellaneous_Info'][i])==False):
+        myString=fee_test1['Miscellaneous_Info'][i]
+        t=myString.find('₹')
+        if (t>=0):
+            val=myString[t:t+7]
+            fee_test1.at[i,'fee_new_info']=val
+            
+fee_test1['fee_new_info'].fillna(0, inplace=True)
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^0-9]','')
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^\w\s]','')
+del fee_test1['Miscellaneous_Info']
+
+
+result2=pd.concat([ypred1, fee_test1], axis=1)
+result2['fee_new_info'] = result2['fee_new_info'].str.strip()
+result2['fee_new_info']=pd.to_numeric(result2.fee_new_info)
+result2['fee_new_info'].fillna(0, inplace=True)
+
+result2['fee_new_info'] = np.where(result2['fee_new_info']>=1000,100,result2['fee_new_info'])
+result2['Fees']=np.where(result2['fee_new_info']==0,result2['Fee_pred'],result2['fee_new_info'])
+
+chk1=pd.read_excel('Final_Test.xlsx')
+chk2=chk1['Qualification'].str.contains('inspired')
+chk2=pd.DataFrame(chk2)
+chk2['td']=np.where(chk2['Qualification']==True,100,0)
+del chk2['Qualification']
+
+result3=pd.concat([result2,chk2],axis=1)
+
+result3['Fees1']=np.where(result3['td']==100,100,result3['Fees'])
+
+del result3['Fee_pred']
+del result3['fee_new_info']
+del result3['Fees']
+del result3['td']
+
+result3.columns=['Fees']
+result3.to_excel('submission_stck_rf.xlsx', index=False)#0.74074945
+
+#Neural Network (0.73636307)
+
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.callbacks import EarlyStopping
+
+#set early stopping monitor so the model stops training when it won't improve anymore
+early_stopping_monitor = EarlyStopping(patience=20)
+n_cols = X_train.shape[1]
+
+
+model_mc = Sequential()
+#add model layers
+model_mc.add(Dense(25, activation='relu', kernel_initializer='normal', input_shape=(n_cols,)))
+model_mc.add(Dense(20, activation='relu', kernel_initializer='normal'))
+#model_mc.add(Dense(200, activation='relu'))
+model_mc.add(Dense(1, kernel_initializer='normal'))
+#compile model using mse as a measure of model performance
+model_mc.compile(optimizer='adam', loss='mean_squared_error')
+
+#train model
+model_mc.fit(final_stack, target, validation_split=0.2, epochs=600, callbacks=[early_stopping_monitor])
+
+ypred = model_mc.predict(X_train)
+ypred_val = model_mc.predict(X_test)
+
+
+print(sqrt(mean_squared_error(y_train, ypred)))
+print(sqrt(mean_squared_error(y_test, ypred_val)))
+
+ypred1 = model_mc.predict(final_stack_val)
+ypred1=pd.DataFrame(ypred1)
+ypred1.columns=['Fee_pred']
+
+
+#With Adjustment
+fee_test = pd.read_excel('Final_Test.xlsx')
+fee_test=fee_test['Miscellaneous_Info']
+fee_test1=pd.DataFrame(fee_test)
+
+for i in range(1987):
+    if (pd.isnull(fee_test1['Miscellaneous_Info'][i])==False):
+        myString=fee_test1['Miscellaneous_Info'][i]
+        t=myString.find('₹')
+        if (t>=0):
+            val=myString[t:t+7]
+            fee_test1.at[i,'fee_new_info']=val
+            
+fee_test1['fee_new_info'].fillna(0, inplace=True)
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^0-9]','')
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^\w\s]','')
+del fee_test1['Miscellaneous_Info']
+
+
+result2=pd.concat([ypred1, fee_test1], axis=1)
+result2['fee_new_info'] = result2['fee_new_info'].str.strip()
+result2['fee_new_info']=pd.to_numeric(result2.fee_new_info)
+result2['fee_new_info'].fillna(0, inplace=True)
+
+result2['fee_new_info'] = np.where(result2['fee_new_info']>=1000,100,result2['fee_new_info'])
+result2['Fees']=np.where(result2['fee_new_info']==0,result2['Fee_pred'],result2['fee_new_info'])
+
+chk1=pd.read_excel('Final_Test.xlsx')
+chk2=chk1['Qualification'].str.contains('inspired')
+chk2=pd.DataFrame(chk2)
+chk2['td']=np.where(chk2['Qualification']==True,100,0)
+del chk2['Qualification']
+
+result3=pd.concat([result2,chk2],axis=1)
+
+result3['Fees1']=np.where(result3['td']==100,100,result3['Fees'])
+
+del result3['Fee_pred']
+del result3['fee_new_info']
+del result3['Fees']
+del result3['td']
+
+result3.columns=['Fees']
+result3.to_excel('submission_stck_nn.xlsx', index=False)#0.73636307
+
+nn_stck=pd.read_excel('submission_stck_nn.xlsx')
+nn_stck.columns=['nn_stck']
+
+rf_stck=pd.read_excel('submission_stck_rf.xlsx')
+rf_stck.columns=['rf_stck']
+
+xgb_stck=pd.read_excel('submission_stck_xgb.xlsx')
+xgb_stck.columns=['xgb_stck']
+
+lregres_stck=pd.read_excel('submission_stck_lregres.xlsx')
+lregres_stck.columns=['lregres_stck']
+
+lasso_stck=pd.read_excel('submission_stck_lasso.xlsx')
+lasso_stck.columns=['lasso_stck']
+
+new_all=pd.concat([nn_stck,rf_stck,xgb_stck,lregres_stck,lasso_stck],axis=1)
+#new_all
+
+#Average_ensemble_v1
+final_stack1=new_all.max(axis=1)
+ypred1=pd.DataFrame(final_stack1)
+ypred1.columns=['Fee_pred']
+
+#With Adjustment
+fee_test = pd.read_excel('Final_Test.xlsx')
+fee_test=fee_test['Miscellaneous_Info']
+fee_test1=pd.DataFrame(fee_test)
+
+for i in range(1987):
+    if (pd.isnull(fee_test1['Miscellaneous_Info'][i])==False):
+        myString=fee_test1['Miscellaneous_Info'][i]
+        t=myString.find('₹')
+        if (t>=0):
+            val=myString[t:t+7]
+            fee_test1.at[i,'fee_new_info']=val
+            
+fee_test1['fee_new_info'].fillna(0, inplace=True)
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^0-9]','')
+fee_test1['fee_new_info']=fee_test1['fee_new_info'].str.replace('[^\w\s]','')
+del fee_test1['Miscellaneous_Info']
+
+
+result2=pd.concat([ypred1, fee_test1], axis=1)
+result2['fee_new_info'] = result2['fee_new_info'].str.strip()
+result2['fee_new_info']=pd.to_numeric(result2.fee_new_info)
+result2['fee_new_info'].fillna(0, inplace=True)
+
+result2['fee_new_info'] = np.where(result2['fee_new_info']>=1000,100,result2['fee_new_info'])
+result2['Fees']=np.where(result2['fee_new_info']==0,result2['Fee_pred'],result2['fee_new_info'])
+
+chk1=pd.read_excel('Final_Test.xlsx')
+chk2=chk1['Qualification'].str.contains('inspired')
+chk2=pd.DataFrame(chk2)
+chk2['td']=np.where(chk2['Qualification']==True,100,0)
+del chk2['Qualification']
+
+result3=pd.concat([result2,chk2],axis=1)
+
+result3['Fees1']=np.where(result3['td']==100,100,result3['Fees'])
+
+del result3['Fee_pred']
+del result3['fee_new_info']
+del result3['Fees']
+del result3['td']
+
+result3.columns=['Fees']
+result3.to_excel('submission_stck_max_stck.xlsx', index=False)#Avg: 0.73991429 min:0.74216787 max: 0.73278729
